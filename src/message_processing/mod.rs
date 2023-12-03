@@ -69,7 +69,7 @@ pub(crate) fn find_message_end_bound_utf16(input: &str, start_checking_from: usi
                 if n > 0 {
                     if escape_char.is_none() { break; }
                     insert_on_queue(&mut buffered_escape_endmark, escape_char.unwrap(), check_from_left_to_right);
-                    for i in 1..n {
+                    for _ in 1..n {
                         let next_char = escape_iter.next();
                         if next_char.is_none() { break; }
                         insert_on_queue(&mut buffered_escape_endmark, next_char.unwrap(), check_from_left_to_right);

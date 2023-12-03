@@ -53,6 +53,10 @@ impl<ClientData> SimpleServer<ClientData> {
     }
 
     fn accept_client(&mut self, stream: TcpStream, socket: SocketAddr) {
+        if stream.set_nonblocking(true).is_err(){
+            //Tried to accept a client that cannot block
+            return;
+        };
         let id = self.clients.reserve_pos();
         let client_data = (self.on_accept)(self, &socket, &id);
         if client_data.is_none() {
@@ -60,7 +64,6 @@ impl<ClientData> SimpleServer<ClientData> {
             return;
         }
         let client_data = client_data.unwrap();
-        stream.set_nonblocking(true);
         let client = Client { id, stream, socket, message_buffer: String::new(), data: client_data };
         self.clients.push_reserved(client.id, client);
     }
@@ -84,15 +87,15 @@ impl<ClientData> SimpleServer<ClientData> {
                         //this happens when its program was closed forcedly
                         self.remove_client(client_index);
                         println!("Disconnected");
-                        client_index += 1;
                         continue;
                     }
                     match String::from_utf16(&stream_read.map(|character| character as u16)) {
                         Ok(received_string) => {
                             self.read_clients_input(client_index, &received_string[0..read_bytes]);
                         }
-                        Err(error) => {
-                            client_index += 1;
+                        Err(_error) => {
+                            //Client data is unparseable, making this connection a wrong one
+                            self.remove_client(client_index);
                         }
                     }
                 }
@@ -110,7 +113,7 @@ impl<ClientData> SimpleServer<ClientData> {
     fn read_clients_input(&mut self, client_index: usize, real_received_string: &str) {
         let client = self.clients.get_mut(client_index).unwrap();
         let message = real_received_string;
-        let mut input = &mut client.message_buffer;
+        let input = &mut client.message_buffer;
         let previous_input_len = input.len();
         input.extend(message.chars());
         let end_bound = crate::message_processing::find_message_end_bound_utf16(&input, input.len(), false,
@@ -173,7 +176,7 @@ impl<ClientData> Drop for SimpleServer<ClientData> {
     fn drop(&mut self) {
         (self.on_close)(self);
         self.clients.iter_mut().for_each(|client| {
-            client.stream.shutdown(Shutdown::Both);
+            let _ = client.stream.shutdown(Shutdown::Both);
         });
     }
 }

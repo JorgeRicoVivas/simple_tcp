@@ -1,8 +1,16 @@
 [package]
-name = "BorromaRust"
+name = "simple_tcp"
 version = "0.1.0"
 edition = "2021"
+authors = ["Jorge Rico Vivas <jorgericosoftware@gmail.com>"]
+license-file = "LICENSE.txt"
+description = "Crate to easily create C-like enums resolving into values"
+repository = "https://github.com/JorgeRicoVivas/simple_tcp"
+#keywords = ["valued", "enum"]
+#categories = ["no-std", "no-std::no-alloc"]
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lib]
+crate-type = ["lib"]
+
 [dependencies]
 fixed_index_vec = { git = "https://github.com/JorgeRicoVivas/fixed_index_vec" }
