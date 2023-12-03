@@ -13,11 +13,13 @@ pub struct SimpleServer<ClientData> {
     on_get_message: fn(&mut Self, &usize, &str),
     on_close: fn(&mut Self),
     endmark: Endmark,
+    is_blocking: bool,
 
 }
 
 impl<ClientData> SimpleServer<ClientData> {
     pub fn new(listener: TcpListener, on_accept_clients: fn(&Self, &SocketAddr, &usize) -> Option<ClientData>) -> SimpleServer<ClientData> {
+        let is_blocking = listener.set_nonblocking(true).is_err();
         Self {
             server_socket: listener,
             clients: FixedIndexVec::new(),
@@ -26,6 +28,7 @@ impl<ClientData> SimpleServer<ClientData> {
             on_get_message: |_, _, _| {},
             on_close: |_| {},
             endmark: ENDMARK,
+            is_blocking,
         }
     }
 
@@ -77,13 +80,13 @@ impl<ClientData> SimpleServer<ClientData> {
         self.clients.push_reserved(client.id, client);
     }
 
-    pub fn read_clients(&mut self, skip_blocking_clients:bool) -> usize {
+    pub fn read_clients(&mut self, skip_blocking_clients: bool) -> usize {
         let mut total_read_bytes: usize = 0;
         let clients_len = self.clients.len();
         let mut client_index = 0;
         while client_index < clients_len {
             let client = self.clients.get_mut(client_index);
-            if client.is_none() || (skip_blocking_clients && client.as_ref().unwrap().is_blocking_read){
+            if client.is_none() || (skip_blocking_clients && client.as_ref().unwrap().is_blocking_read && self.is_blocking) {
                 client_index += 1;
                 continue;
             }
@@ -152,11 +155,11 @@ impl<ClientData> SimpleServer<ClientData> {
     }
 
     pub fn read_clients_to_end(&mut self) -> usize {
-        let total_read_bytes = 0;
+        let mut total_read_bytes = 0;
         loop {
             match self.read_clients(true) {
                 0 => return total_read_bytes,
-                read_bytes => { total_read_bytes.checked_add(read_bytes).unwrap_or_else(|| usize::MAX) }
+                read_bytes => total_read_bytes=total_read_bytes.checked_add(read_bytes).unwrap_or_else(|| usize::MAX)
             }
         }
     }
