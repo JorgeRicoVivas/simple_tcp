@@ -8,10 +8,12 @@ use crate::{Endmark, ENDMARK};
 pub struct SimpleServer<ClientData> {
     server_socket: TcpListener,
     clients: FixedIndexVec<Client<ClientData>>,
-    on_accept: fn(&Self, &SocketAddr, &usize) -> Option<ClientData>,
+    on_request_accept: fn(&Self, &SocketAddr, &usize) -> Option<ClientData>,
+    on_accept: fn(&Self, &usize),
     on_get_message: fn(&mut Self, &usize, &str),
     on_close: fn(&mut Self),
     endmark: Endmark,
+
 }
 
 impl<ClientData> SimpleServer<ClientData> {
@@ -19,19 +21,28 @@ impl<ClientData> SimpleServer<ClientData> {
         Self {
             server_socket: listener,
             clients: FixedIndexVec::new(),
-            on_accept: on_accept_clients,
+            on_request_accept: on_accept_clients,
+            on_accept: |_, _| {},
             on_get_message: |_, _, _| {},
             on_close: |_| {},
             endmark: ENDMARK,
         }
     }
 
-    pub fn on_accept(&mut self, on_accept: fn(&Self, &SocketAddr, &usize) -> Option<ClientData>) {
+    pub fn on_accept(&mut self, on_accept: fn(&Self, &usize)) {
         self.on_accept = on_accept;
+    }
+
+    pub fn on_request_accept(&mut self, on_request_accept: fn(&Self, &SocketAddr, &usize) -> Option<ClientData>) {
+        self.on_request_accept = on_request_accept;
     }
 
     pub fn on_get_message(&mut self, on_get_message: fn(&mut Self, &usize, &str)) {
         self.on_get_message = on_get_message;
+    }
+
+    pub fn on_close(&mut self, on_close: fn(&mut Self)) {
+        self.on_close = on_close;
     }
 
     pub fn accept(&mut self) -> Option<()> {
@@ -58,13 +69,14 @@ impl<ClientData> SimpleServer<ClientData> {
             return;
         };
         let id = self.clients.reserve_pos();
-        let client_data = (self.on_accept)(self, &socket, &id);
+        let client_data = (self.on_request_accept)(self, &socket, &id);
         if client_data.is_none() {
             self.clients.remove_reserved_pos(id);
             return;
         }
         let client_data = client_data.unwrap();
         let client = Client { id, stream, socket, message_buffer: String::new(), data: client_data };
+        (self.on_accept)(self, &id);
         self.clients.push_reserved(client.id, client);
     }
 
