@@ -51,10 +51,24 @@ impl<ServerData, ClientData> SimpleServer<ServerData, ClientData> {
         self.on_close = on_close;
     }
 
-    pub fn accept(&mut self) -> Option<()> {
+    pub fn accept(&mut self) -> Option<usize> {
         let (client_stream, client_socket) = self.server_socket.accept().ok()?;
-        self.accept_client(client_stream, client_socket);
-        Some(())
+        self.accept_client(client_stream, client_socket)
+    }
+
+    pub fn accept_incoming_not_blocking(&mut self) -> Vec<usize> {
+        if self.is_blocking { return Vec::new(); }
+        let mut ids = Vec::new();
+        loop {
+            match self.server_socket.accept().ok() {
+                None => return ids,
+                Some((client_stream, client_socket)) => {
+                    let accepted_client = self.accept_client(client_stream, client_socket);
+                    if accepted_client.is_none() { continue; }
+                    ids.push(accepted_client.unwrap())
+                }
+            }
+        }
     }
 
     pub fn accept_incoming(&mut self) {
@@ -69,18 +83,19 @@ impl<ServerData, ClientData> SimpleServer<ServerData, ClientData> {
             });
     }
 
-    fn accept_client(&mut self, stream: TcpStream, socket: SocketAddr) {
+    fn accept_client(&mut self, stream: TcpStream, socket: SocketAddr) -> Option<usize> {
         let is_blocking_read = stream.set_nonblocking(true).is_err();
         let id = self.clients.reserve_pos();
         let client_data = (self.on_request_accept)(self, &socket, &id);
         if client_data.is_none() {
             self.clients.remove_reserved_pos(id);
-            return;
+            return None;
         }
         let client_data = client_data.unwrap();
         let client = Client { id, stream, socket, message_buffer: String::new(), is_blocking_read, data: client_data };
         self.clients.push_reserved(client.id, client);
         (self.on_accept)(self, &id);
+        Some(id)
     }
 
     pub fn read_clients(&mut self, skip_blocking_clients: bool) -> usize {
