@@ -158,6 +158,10 @@ impl<ClientData> SimpleServer<ClientData> {
         self.clients.get_mut(client_id)
     }
 
+    pub fn clients_len(&self) -> usize {
+        self.clients.len()
+    }
+
     pub fn remove_client(&mut self, client_id: usize) -> Option<Client<ClientData>> {
         self.clients.remove(client_id)
     }
