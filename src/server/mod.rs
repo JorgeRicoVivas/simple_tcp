@@ -16,7 +16,6 @@ pub struct SimpleServer<ServerData, ClientData> {
     on_close: fn(&mut Self),
     endmark: Endmark,
     is_blocking: bool,
-
 }
 
 impl<ServerData, ClientData> SimpleServer<ServerData, ClientData> {
