@@ -6,6 +6,7 @@ use fixed_index_vec::fixed_index_vec::FixedIndexVec;
 
 use crate::{Endmark, ENDMARK};
 
+#[derive(Debug)]
 pub struct SimpleServer<ServerData, ClientData> {
     server_socket: TcpListener,
     clients: FixedIndexVec<Client<ClientData>>,
@@ -239,6 +240,7 @@ impl<ServerData, ClientData> Drop for SimpleServer<ServerData, ClientData> {
     }
 }
 
+#[derive(Debug)]
 pub struct Client<ClientData> {
     id: usize,
     stream: TcpStream,

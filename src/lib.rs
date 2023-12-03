@@ -1,4 +1,4 @@
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Endmark {
     string: &'static str,
     escape: &'static str,
