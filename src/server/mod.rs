@@ -64,10 +64,7 @@ impl<ClientData> SimpleServer<ClientData> {
     }
 
     fn accept_client(&mut self, stream: TcpStream, socket: SocketAddr) {
-        if stream.set_nonblocking(true).is_err() {
-            //Tried to accept a client that cannot block
-            return;
-        };
+        let is_blocking_read = stream.set_nonblocking(true).is_err();
         let id = self.clients.reserve_pos();
         let client_data = (self.on_request_accept)(self, &socket, &id);
         if client_data.is_none() {
@@ -75,24 +72,27 @@ impl<ClientData> SimpleServer<ClientData> {
             return;
         }
         let client_data = client_data.unwrap();
-        let client = Client { id, stream, socket, message_buffer: String::new(), data: client_data };
+        let client = Client { id, stream, socket, message_buffer: String::new(), is_blocking_read, data: client_data };
         (self.on_accept)(self, &id);
         self.clients.push_reserved(client.id, client);
     }
 
-    pub fn read_clients(&mut self) {
+    pub fn read_clients(&mut self, skip_blocking_clients:bool) -> usize {
+        let mut total_read_bytes: usize = 0;
         let clients_len = self.clients.len();
         let mut client_index = 0;
         while client_index < clients_len {
-            if !self.clients.contains_index(client_index) {
+            let client = self.clients.get_mut(client_index);
+            if client.is_none() || (skip_blocking_clients && client.as_ref().unwrap().is_blocking_read){
                 client_index += 1;
                 continue;
             }
-            let client = self.clients.get_mut(client_index).unwrap();
+            let client = client.unwrap();
             let mut stream_read = [0; 1024];
             let result = client.stream.read(&mut stream_read);
             match result {
                 Ok(read_bytes) => {
+                    total_read_bytes = total_read_bytes.checked_add(read_bytes).unwrap_or_else(|| usize::MAX);
                     let client_suddenly_disconnected = read_bytes == 0;
                     if client_suddenly_disconnected {
                         //The client has discconected without notifying it's connection's end,
@@ -125,6 +125,7 @@ impl<ClientData> SimpleServer<ClientData> {
                 }
             }
         }
+        total_read_bytes
     }
 
     fn read_clients_input(&mut self, client_index: usize, real_received_string: &str) {
@@ -148,6 +149,16 @@ impl<ClientData> SimpleServer<ClientData> {
                 *keep_checking = false;
             }
         });
+    }
+
+    pub fn read_clients_to_end(&mut self) -> usize {
+        let total_read_bytes = 0;
+        loop {
+            match self.read_clients(true) {
+                0 => return total_read_bytes,
+                read_bytes => { total_read_bytes.checked_add(read_bytes).unwrap_or_else(|| usize::MAX) }
+            }
+        }
     }
 
     pub fn get_client(&self, client_id: usize) -> Option<&Client<ClientData>> {
@@ -207,6 +218,7 @@ pub struct Client<ClientData> {
     stream: TcpStream,
     socket: SocketAddr,
     message_buffer: String,
+    is_blocking_read: bool,
     data: ClientData,
 }
 
