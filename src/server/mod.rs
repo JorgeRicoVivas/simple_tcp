@@ -19,13 +19,13 @@ pub struct SimpleServer<ServerData, ClientData> {
 }
 
 impl<ServerData, ClientData> SimpleServer<ServerData, ClientData> {
-    pub fn new(listener: TcpListener, server_data: ServerData, on_accept_clients: fn(&mut Self, &SocketAddr, &usize) -> Option<ClientData>) -> SimpleServer<ServerData, ClientData> {
+    pub fn new(listener: TcpListener, server_data: ServerData, on_request_accept: fn(&mut Self, &SocketAddr, &usize) -> Option<ClientData>) -> SimpleServer<ServerData, ClientData> {
         let is_blocking = listener.set_nonblocking(true).is_err();
         Self {
             server_socket: listener,
             clients: FixedIndexVec::new(),
             data: server_data,
-            on_request_accept: on_accept_clients,
+            on_request_accept,
             on_accept: |_, _| {},
             on_get_message: |_, _, _| {},
             on_close: |_| {},
