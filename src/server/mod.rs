@@ -53,7 +53,7 @@ impl<ClientData> SimpleServer<ClientData> {
     }
 
     fn accept_client(&mut self, stream: TcpStream, socket: SocketAddr) {
-        if stream.set_nonblocking(true).is_err(){
+        if stream.set_nonblocking(true).is_err() {
             //Tried to accept a client that cannot block
             return;
         };
@@ -102,6 +102,11 @@ impl<ClientData> SimpleServer<ClientData> {
                 Err(error) => {
                     match error.kind() {
                         ErrorKind::WouldBlock => {}
+                        ErrorKind::ConnectionReset => {
+                            self.remove_client(client_index);
+                            println!("Disconnected by reset");
+                            continue;
+                        }
                         _ => println!("Error is {:?}", error.kind()),
                     };
                     client_index += 1;
