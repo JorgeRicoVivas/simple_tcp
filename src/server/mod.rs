@@ -1,13 +1,15 @@
 use std::io::{ErrorKind, Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
+use std::ops::{Deref, DerefMut};
 
 use fixed_index_vec::fixed_index_vec::FixedIndexVec;
 
 use crate::{Endmark, ENDMARK};
 
-pub struct SimpleServer<ClientData> {
+pub struct SimpleServer<ServerData, ClientData> {
     server_socket: TcpListener,
     clients: FixedIndexVec<Client<ClientData>>,
+    data: ServerData,
     on_request_accept: fn(&Self, &SocketAddr, &usize) -> Option<ClientData>,
     on_accept: fn(&Self, &usize),
     on_get_message: fn(&mut Self, &usize, &str),
@@ -17,12 +19,13 @@ pub struct SimpleServer<ClientData> {
 
 }
 
-impl<ClientData> SimpleServer<ClientData> {
-    pub fn new(listener: TcpListener, on_accept_clients: fn(&Self, &SocketAddr, &usize) -> Option<ClientData>) -> SimpleServer<ClientData> {
+impl<ServerData, ClientData> SimpleServer<ServerData, ClientData> {
+    pub fn new(listener: TcpListener, server_data: ServerData, on_accept_clients: fn(&Self, &SocketAddr, &usize) -> Option<ClientData>) -> SimpleServer<ServerData, ClientData> {
         let is_blocking = listener.set_nonblocking(true).is_err();
         Self {
             server_socket: listener,
             clients: FixedIndexVec::new(),
+            data: server_data,
             on_request_accept: on_accept_clients,
             on_accept: |_, _| {},
             on_get_message: |_, _, _| {},
@@ -159,7 +162,7 @@ impl<ClientData> SimpleServer<ClientData> {
         loop {
             match self.read_clients(true) {
                 0 => return total_read_bytes,
-                read_bytes => total_read_bytes=total_read_bytes.checked_add(read_bytes).unwrap_or_else(|| usize::MAX)
+                read_bytes => total_read_bytes = total_read_bytes.checked_add(read_bytes).unwrap_or_else(|| usize::MAX)
             }
         }
     }
@@ -205,9 +208,30 @@ impl<ClientData> SimpleServer<ClientData> {
             client.stream.write(message.as_bytes())
         }).collect::<Vec<_>>()
     }
+    pub fn data(&self) -> &ServerData {
+        &self.data
+    }
+
+    pub fn data_mut(&mut self) -> &mut ServerData {
+        &mut self.data
+    }
 }
 
-impl<ClientData> Drop for SimpleServer<ClientData> {
+impl<ServerData, ClientData> Deref for SimpleServer<ServerData, ClientData> {
+    type Target = ServerData;
+
+    fn deref(&self) -> &Self::Target {
+        self.data()
+    }
+}
+
+impl<ServerData, ClientData> DerefMut for SimpleServer<ServerData, ClientData> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.data_mut()
+    }
+}
+
+impl<ServerData, ClientData> Drop for SimpleServer<ServerData, ClientData> {
     fn drop(&mut self) {
         (self.on_close)(self);
         self.clients.iter_mut().for_each(|client| {
@@ -240,5 +264,19 @@ impl<ClientData> Client<ClientData> {
 
     pub fn data_mut(&mut self) -> &mut ClientData {
         &mut self.data
+    }
+}
+
+impl<ClientData> Deref for Client<ClientData> {
+    type Target = ClientData;
+
+    fn deref(&self) -> &Self::Target {
+        self.data()
+    }
+}
+
+impl<ClientData> DerefMut for Client<ClientData> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.data_mut()
     }
 }
