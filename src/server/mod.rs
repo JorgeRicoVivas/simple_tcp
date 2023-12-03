@@ -10,8 +10,8 @@ pub struct SimpleServer<ServerData, ClientData> {
     server_socket: TcpListener,
     clients: FixedIndexVec<Client<ClientData>>,
     data: ServerData,
-    on_request_accept: fn(&Self, &SocketAddr, &usize) -> Option<ClientData>,
-    on_accept: fn(&Self, &usize),
+    on_request_accept: fn(&mut Self, &SocketAddr, &usize) -> Option<ClientData>,
+    on_accept: fn(&mut Self, &usize),
     on_get_message: fn(&mut Self, &usize, &str),
     on_close: fn(&mut Self),
     endmark: Endmark,
@@ -19,7 +19,7 @@ pub struct SimpleServer<ServerData, ClientData> {
 }
 
 impl<ServerData, ClientData> SimpleServer<ServerData, ClientData> {
-    pub fn new(listener: TcpListener, server_data: ServerData, on_accept_clients: fn(&Self, &SocketAddr, &usize) -> Option<ClientData>) -> SimpleServer<ServerData, ClientData> {
+    pub fn new(listener: TcpListener, server_data: ServerData, on_accept_clients: fn(&mut Self, &SocketAddr, &usize) -> Option<ClientData>) -> SimpleServer<ServerData, ClientData> {
         let is_blocking = listener.set_nonblocking(true).is_err();
         Self {
             server_socket: listener,
@@ -34,11 +34,11 @@ impl<ServerData, ClientData> SimpleServer<ServerData, ClientData> {
         }
     }
 
-    pub fn on_accept(&mut self, on_accept: fn(&Self, &usize)) {
+    pub fn on_accept(&mut self, on_accept: fn(&mut Self, &usize)) {
         self.on_accept = on_accept;
     }
 
-    pub fn on_request_accept(&mut self, on_request_accept: fn(&Self, &SocketAddr, &usize) -> Option<ClientData>) {
+    pub fn on_request_accept(&mut self, on_request_accept: fn(&mut Self, &SocketAddr, &usize) -> Option<ClientData>) {
         self.on_request_accept = on_request_accept;
     }
 
