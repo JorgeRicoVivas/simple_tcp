@@ -79,8 +79,8 @@ impl<ServerData, ClientData> SimpleServer<ServerData, ClientData> {
         }
         let client_data = client_data.unwrap();
         let client = Client { id, stream, socket, message_buffer: String::new(), is_blocking_read, data: client_data };
-        (self.on_accept)(self, &id);
         self.clients.push_reserved(client.id, client);
+        (self.on_accept)(self, &id);
     }
 
     pub fn read_clients(&mut self, skip_blocking_clients: bool) -> usize {
