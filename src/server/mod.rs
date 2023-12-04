@@ -229,6 +229,11 @@ impl<ServerData, ClientData> SimpleServer<ServerData, ClientData> {
     pub fn endmark(&self) -> &Endmark {
         &self.endmark
     }
+
+    pub fn force_is_blocking(&mut self){
+        self.server_socket.set_nonblocking(false);
+        self.is_blocking=true;
+    }
 }
 
 impl<ServerData, ClientData> Deref for SimpleServer<ServerData, ClientData> {
