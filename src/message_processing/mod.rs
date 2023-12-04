@@ -139,6 +139,7 @@ impl Endmark {
     pub fn escape(&self) -> &'static str {
         self.escape
     }
+    //
     pub fn prepare_message(&self, string: &str) -> String {
         let mut string = string.replace(self.string, self.escape);
         string.extend(self.string.chars());
