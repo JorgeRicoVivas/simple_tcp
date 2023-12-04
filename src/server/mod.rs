@@ -4,7 +4,7 @@ use std::ops::{Deref, DerefMut};
 
 use fixed_index_vec::fixed_index_vec::FixedIndexVec;
 
-use crate::{Endmark, ENDMARK};
+use crate::message_processing::{DEFAULT_ENDMARK, Endmark};
 
 #[derive(Debug)]
 pub struct SimpleServer<ServerData, ClientData> {
@@ -30,7 +30,7 @@ impl<ServerData, ClientData> SimpleServer<ServerData, ClientData> {
             on_accept: |_, _| {},
             on_get_message: |_, _, _| {},
             on_close: |_| {},
-            endmark: ENDMARK,
+            endmark: DEFAULT_ENDMARK,
             is_blocking,
         }
     }
@@ -156,12 +156,12 @@ impl<ServerData, ClientData> SimpleServer<ServerData, ClientData> {
         let previous_input_len = input.len();
         input.extend(message.chars());
         let end_bound = crate::message_processing::find_message_end_bound_utf16(&input, input.len(), false,
-                                                                                previous_input_len.checked_sub(self.endmark.string.len() + 1).unwrap_or(0), &self.endmark);
+                                                                                previous_input_len.checked_sub(self.endmark.string().len() + 1).unwrap_or(0), &self.endmark);
         if end_bound.is_none() { return; }
         let end_bound = end_bound.unwrap();
-        let mut messages = crate::message_processing::substring_utf16(input, 0, end_bound + self.endmark.string.len());
+        let mut messages = crate::message_processing::substring_utf16(input, 0, end_bound + self.endmark.string().len());
 
-        let buffer = crate::message_processing::substring_utf16(input, end_bound + self.endmark.string.len(), input.len());
+        let buffer = crate::message_processing::substring_utf16(input, end_bound + self.endmark.string().len(), input.len());
         client.message_buffer = buffer;
 
         crate::message_processing::find_and_process_messages(&mut messages, 0, &self.endmark.clone(), |message, keep_checking| {
@@ -201,14 +201,12 @@ impl<ServerData, ClientData> SimpleServer<ServerData, ClientData> {
     pub fn send_message_to_client(&mut self, client: usize, message: &str) -> Option<std::io::Result<usize>> {
         let client = self.clients.get_mut(client);
         if client.is_none() { return None; }
-        let mut message = message.replace(self.endmark.string, self.endmark.escape);
-        message.extend(self.endmark.string.chars());
+        let message = self.endmark.prepare_message(message);
         Some(client.unwrap().stream.write(message.as_bytes()))
     }
 
     pub fn send_message_to_clients(&mut self, clients: &[usize], message: &str) -> Vec<Option<std::io::Result<usize>>> {
-        let mut message = message.replace(self.endmark.string, self.endmark.escape);
-        message.extend(self.endmark.string.chars());
+        let message = self.endmark.prepare_message(message);
         clients.into_iter().map(|&client| {
             let client = self.clients.get_mut(client);
             if client.is_none() { return None; }
@@ -217,8 +215,7 @@ impl<ServerData, ClientData> SimpleServer<ServerData, ClientData> {
     }
 
     pub fn send_message_to_all_clients(&mut self, message: &str) -> Vec<std::io::Result<usize>> {
-        let mut message = message.replace(self.endmark.string, self.endmark.escape);
-        message.extend(self.endmark.string.chars());
+        let message = self.endmark.prepare_message(message);
         self.clients.iter_mut().map(|client| {
             client.stream.write(message.as_bytes())
         }).collect::<Vec<_>>()
@@ -229,6 +226,10 @@ impl<ServerData, ClientData> SimpleServer<ServerData, ClientData> {
 
     pub fn data_mut(&mut self) -> &mut ServerData {
         &mut self.data
+    }
+
+    pub fn endmark(&self) -> &Endmark {
+        &self.endmark
     }
 }
 

@@ -1,6 +1,5 @@
 use std::collections::VecDeque;
 
-use crate::Endmark;
 
 pub(crate) fn substring_utf16(original_string: &str, start_index: usize, end_index: usize) -> String {
     String::from_utf16(&*original_string.chars().take(end_index).skip(start_index).map(|char| char as u16).collect::<Vec<u16>>()).unwrap()
@@ -109,7 +108,6 @@ pub(crate) fn insert_on_queue<T>(queue: &mut VecDeque<T>, value: T, front_to_bac
     push(queue, value);
 }
 
-
 pub(crate) fn find_and_process_messages(input: &mut String, mut start_checking_from: usize, endmark: &Endmark, mut action: impl FnMut(&str, &mut bool)) {
     let mut keep_checking = true;
     while keep_checking {
@@ -120,5 +118,30 @@ pub(crate) fn find_and_process_messages(input: &mut String, mut start_checking_f
         action(&message, &mut keep_checking);
         *input = substring_utf16(input, end_of_message_index + endmark.string.len(), input.len());
         start_checking_from = 0;
+    }
+}
+
+pub const DEFAULT_ENDMARK: Endmark = Endmark::new("EOF", "\\EOF");
+
+#[derive(Clone, Debug)]
+pub struct Endmark {
+    string: &'static str,
+    escape: &'static str,
+}
+
+impl Endmark {
+    pub const fn new(string: &'static str, escape: &'static str) -> Self {
+        Self { string, escape }
+    }
+    pub fn string(&self) -> &'static str {
+        self.string
+    }
+    pub fn escape(&self) -> &'static str {
+        self.escape
+    }
+    pub fn prepare_message(&self, string: &str) -> String {
+        let mut string = string.replace(self.string, self.escape);
+        string.extend(self.string.chars());
+        string
     }
 }
