@@ -119,7 +119,6 @@ impl<ServerData, ClientData> SimpleServer<ServerData, ClientData> {
                         //The client has discconected without notifying it's connection's end,
                         //this happens when its program was closed forcedly
                         self.remove_client(client_index);
-                        println!("Disconnected");
                         continue;
                     }
                     match String::from_utf16(&stream_read.map(|character| character as u16)) {
@@ -137,10 +136,9 @@ impl<ServerData, ClientData> SimpleServer<ServerData, ClientData> {
                         ErrorKind::WouldBlock => {}
                         ErrorKind::ConnectionReset => {
                             self.remove_client(client_index);
-                            println!("Disconnected by reset");
                             continue;
                         }
-                        _ => println!("Error is {:?}", error.kind()),
+                        _ => {},
                     };
                     client_index += 1;
                 }

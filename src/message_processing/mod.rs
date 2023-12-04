@@ -37,7 +37,6 @@ pub(crate) fn find_message_end_bound_utf16(input: &str, start_checking_from: usi
             }
             let is_endmark = buffered_endmark.eq(&desired_endmark_queue);
             let is_escape_endmark = buffered_escape_endmark.eq(&desired_escape_endmark_queue);
-            //println!("From left: {buffered_endmark:?}, {buffered_escape_endmark:?}, {is_endmark}, {is_escape_endmark}");
             let real_index = character_index - endmark.len();
             if is_endmark && !is_escape_endmark {
                 return Some(real_index);
@@ -86,7 +85,6 @@ pub(crate) fn find_message_end_bound_utf16(input: &str, start_checking_from: usi
             if character_index != 0 {
                 character_index -= 1;
             }
-            //println!("From right: {buffered_endmark:?}, {buffered_escape_endmark:?}, {is_endmark}, {is_escape_endmark}");
             if is_endmark && !is_escape_endmark {
                 return Some(character_index);
             }
