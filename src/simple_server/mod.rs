@@ -1,5 +1,6 @@
 use std::io::{ErrorKind, Read, Write};
 use std::mem;
+use std::fmt::Debug;
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::ops::{Deref, DerefMut};
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -8,12 +9,13 @@ use fixed_index_vec::fixed_index_vec::FixedIndexVec;
 
 use crate::message_processing::{DEFAULT_ENDMARK, Endmark};
 use crate::server::{AcceptError, Server, ServerAcceptError};
+use crate::unchecked_read_write_lock::UncheckedRwLock;
 
 pub mod builder;
 
 #[derive(Debug)]
 pub struct SimpleServer<ServerData, ClientData> {
-    pub(crate) inner: RwLock<InnerSimpleServer<ServerData, ClientData>>,
+    pub(crate) inner: UncheckedRwLock<InnerSimpleServer<ServerData, ClientData>>,
 }
 
 impl<ServerData, ClientData> Server for SimpleServer<ServerData, ClientData> {
@@ -38,15 +40,15 @@ impl<ServerData, ClientData> Server for SimpleServer<ServerData, ClientData> {
     }
 
     fn clients_len(&self) -> usize {
-        self.inner.read().unwrap().clients().len()
+        self.inner.read().clients().len()
     }
 
     fn send_message_to_client(&self, client: usize, message: &str) -> Option<std::io::Result<usize>> {
-        self.inner.read().unwrap().send_message_to_client(client, message)
+        self.inner.read().send_message_to_client(client, message)
     }
 
     fn send_message_to_clients(&self, clients: &[usize], message: &str) -> Vec<Option<std::io::Result<usize>>> {
-        self.inner.read().unwrap().send_message_to_clients(clients, message)
+        self.inner.read().send_message_to_clients(clients, message)
     }
 }
 
@@ -62,11 +64,11 @@ impl<ServerData, ClientData> Deref for SimpleServer<ServerData, ClientData> {
 #[derive(Debug)]
 pub struct InnerSimpleServer<ServerData, ClientData> {
     server_socket: TcpListener,
-    clients: RwLock<FixedIndexVec<Client<ClientData>>>,
+    clients: UncheckedRwLock<FixedIndexVec<Client<ClientData>>>,
     data: ServerData,
-    filter_request_accept: fn(&RwLock<Self>, &SocketAddr, &usize) -> Option<ClientData>,
-    on_accept: fn(&RwLock<Self>, &usize),
-    on_get_message: fn(&RwLock<Self>, &usize, &str),
+    filter_request_accept: fn(&UncheckedRwLock<Self>, &SocketAddr, &usize) -> Option<ClientData>,
+    on_accept: fn(&UncheckedRwLock<Self>, &usize),
+    on_get_message: fn(&UncheckedRwLock<Self>, &usize, &str),
     on_close: fn(&mut Self),
     endmark: Endmark,
     is_blocking: bool,
@@ -143,7 +145,7 @@ impl<ServerData, ClientData> InnerSimpleServer<ServerData, ClientData> {
     ///     },
     ///     |server, client_socket, client_index|{
     ///         // If client's IP belongs to one of the blacklisted ones, the connection gets cancelled
-    ///         if server.read().unwrap().black_list.contains(&client_socket.ip()){
+    ///         if server.read().black_list.contains(&client_socket.ip()){
     ///             return None;
     ///         }
     ///         // The client it's whitelisted, so we initialize it's data in order to accept it
@@ -153,11 +155,11 @@ impl<ServerData, ClientData> InnerSimpleServer<ServerData, ClientData> {
     /// // Blacklists another IP
     /// server.black_list.insert(IpAddr::from_str("192.168.1.160").unwrap());
     /// ```
-    pub fn new(listener: TcpListener, server_data: ServerData, filter_request_accept: fn(&RwLock<InnerSimpleServer<ServerData, ClientData>>, &SocketAddr, &usize) -> Option<ClientData>) -> InnerSimpleServer<ServerData, ClientData> {
+    pub fn new(listener: TcpListener, server_data: ServerData, filter_request_accept: fn(&UncheckedRwLock<InnerSimpleServer<ServerData, ClientData>>, &SocketAddr, &usize) -> Option<ClientData>) -> InnerSimpleServer<ServerData, ClientData> {
         let is_blocking = listener.set_nonblocking(true).is_err();
         Self {
             server_socket: listener,
-            clients: RwLock::new(FixedIndexVec::new()),
+            clients: UncheckedRwLock::new(RwLock::new(FixedIndexVec::new())),
             data: server_data,
             filter_request_accept,
             on_accept: |_, _| {},
@@ -186,7 +188,7 @@ impl<ServerData, ClientData> InnerSimpleServer<ServerData, ClientData> {
     ///     Some("My client from 192.x.y.z".to_string())
     /// });
     /// ```
-    pub fn filter_request_accept(&mut self, on_request_accept: fn(&RwLock<Self>, &SocketAddr, &usize) -> Option<ClientData>) {
+    pub fn filter_request_accept(&mut self, on_request_accept: fn(&UncheckedRwLock<Self>, &SocketAddr, &usize) -> Option<ClientData>) {
         self.filter_request_accept = on_request_accept;
     }
 
@@ -210,11 +212,11 @@ impl<ServerData, ClientData> InnerSimpleServer<ServerData, ClientData> {
     ///     server.send_message_to_client(*accepted_client_index, &*salutation_message);
     /// });
     /// ```
-    pub fn on_accept(&mut self, on_accept: fn(&RwLock<Self>, &usize)) {
+    pub fn on_accept(&mut self, on_accept: fn(&UncheckedRwLock<Self>, &usize)) {
         self.on_accept = on_accept;
     }
 
-    pub fn on_get_message(&mut self, on_get_message: fn(&RwLock<Self>, &usize, &str)) {
+    pub fn on_get_message(&mut self, on_get_message: fn(&UncheckedRwLock<Self>, &usize, &str)) {
         self.on_get_message = on_get_message;
     }
 
@@ -222,8 +224,8 @@ impl<ServerData, ClientData> InnerSimpleServer<ServerData, ClientData> {
         self.on_close = on_close;
     }
 
-    pub fn accept(locked_self: &RwLock<Self>) -> Result<usize, AcceptError> {
-        let accept = locked_self.read().unwrap().server_socket.accept();
+    pub fn accept(locked_self: &UncheckedRwLock<Self>) -> Result<usize, AcceptError> {
+        let accept = locked_self.read().server_socket.accept();
         if accept.is_err() {
             return Err(AcceptError::IOError(accept.err().unwrap()));
         }
@@ -231,11 +233,11 @@ impl<ServerData, ClientData> InnerSimpleServer<ServerData, ClientData> {
         Self::join_filter_client(locked_self, client_stream, client_socket)
     }
 
-    pub fn accept_incoming_not_blocking(locked_self: &RwLock<Self>) -> Result<Vec<Result<usize, AcceptError>>, ServerAcceptError> {
-        if locked_self.read().unwrap().is_blocking { return Err(ServerAcceptError::IsBlocking); }
+    pub fn accept_incoming_not_blocking(locked_self: &UncheckedRwLock<Self>) -> Result<Vec<Result<usize, AcceptError>>, ServerAcceptError> {
+        if locked_self.read().is_blocking { return Err(ServerAcceptError::IsBlocking); }
         let mut clients = Vec::new();
         loop {
-            let incoming = locked_self.read().unwrap().server_socket.accept().ok();
+            let incoming = locked_self.read().server_socket.accept().ok();
             match incoming {
                 None => return Ok(clients),
                 Some((client_stream, client_socket)) => {
@@ -245,8 +247,8 @@ impl<ServerData, ClientData> InnerSimpleServer<ServerData, ClientData> {
         }
     }
 
-    fn accept_incoming(locked_self: &RwLock<Self>) -> Vec<Result<usize, AcceptError>> {
-        locked_self.read().unwrap().server_socket.incoming()
+    fn accept_incoming(locked_self: &UncheckedRwLock<Self>) -> Vec<Result<usize, AcceptError>> {
+        locked_self.read().server_socket.incoming()
             .filter(Result::is_ok)
             .map(Result::unwrap)
             .collect::<Vec<_>>()
@@ -259,36 +261,36 @@ impl<ServerData, ClientData> InnerSimpleServer<ServerData, ClientData> {
             .collect()
     }
 
-    fn join_filter_client(locked_self: &RwLock<Self>, stream: TcpStream, socket: SocketAddr) -> Result<usize, AcceptError> {
+    fn join_filter_client(locked_self: &UncheckedRwLock<Self>, stream: TcpStream, socket: SocketAddr) -> Result<usize, AcceptError> {
         let is_blocking_read = stream.set_nonblocking(true).is_err();
 
-        let id = (&mut *locked_self.write().unwrap()).clients.write().unwrap().reserve_pos();
-        let client_data = (locked_self.read().unwrap().filter_request_accept)(locked_self, &socket, &id);
+        let id = (&mut *locked_self.write()).clients.write().reserve_pos();
+        let client_data = (locked_self.read().filter_request_accept)(locked_self, &socket, &id);
         if client_data.is_none() {
-            locked_self.write().unwrap().clients.write().unwrap().remove_reserved_pos(id);
+            locked_self.write().clients.write().remove_reserved_pos(id);
             return Err(AcceptError::DeniedSocket(socket));
         }
         let client_data = client_data.unwrap();
-        let client = Client { id, stream: RwLock::new(stream), socket, message_buffer: String::new(), is_blocking_read, should_remove: false, data: client_data };
-        locked_self.write().unwrap().clients.write().unwrap().push_reserved(client.id, client);
-        (locked_self.read().unwrap().on_accept)(locked_self, &id);
+        let client = Client { id, stream: UncheckedRwLock::new(RwLock::new(stream)), socket, message_buffer: String::new(), is_blocking_read, should_remove: false, data: client_data };
+        locked_self.write().clients.write().push_reserved(client.id, client);
+        (locked_self.read().on_accept)(locked_self, &id);
         Ok(id)
     }
 
-    pub fn read_client(locked_self: &RwLock<Self>, client_index: usize) -> Option<usize> {
-        if !locked_self.read().unwrap().clients().contains_index(client_index) {
+    pub fn read_client(locked_self: &UncheckedRwLock<Self>, client_index: usize) -> Option<usize> {
+        if !locked_self.read().clients().contains_index(client_index) {
             return None;
         }
-        if locked_self.read().unwrap().clients().get(client_index).unwrap().should_remove {
+        if locked_self.read().clients().get(client_index).unwrap().should_remove {
             return None;
         }
         let mut stream_read = [0; 1024];
         let mut total_read_bytes = 0_usize;
         loop {
-            if locked_self.read().unwrap().clients().get(client_index).unwrap().should_remove {
+            if locked_self.read().clients().get(client_index).unwrap().should_remove {
                 return None;
             }
-            let read = (&*locked_self.read().unwrap()).clients().get(client_index).unwrap().stream.write().unwrap().read(&mut stream_read);
+            let read = (&*locked_self.read()).clients().get(client_index).unwrap().stream.write().read(&mut stream_read);
             match read {
                 Ok(read_bytes) => {
                     total_read_bytes = total_read_bytes.checked_add(read_bytes).unwrap_or_else(|| usize::MAX);
@@ -296,7 +298,7 @@ impl<ServerData, ClientData> InnerSimpleServer<ServerData, ClientData> {
                     if client_suddenly_disconnected {
                         //The client has disconnected without notifying it's connection's end,
                         //this happens when its program was closed forcedly
-                        (&*locked_self.read().unwrap()).clients.write().unwrap().get_mut(client_index).unwrap().should_remove = true;
+                        (&*locked_self.read()).clients.write().get_mut(client_index).unwrap().should_remove = true;
                         continue;
                     }
                     match String::from_utf16(&stream_read.map(|character| character as u16)) {
@@ -305,7 +307,7 @@ impl<ServerData, ClientData> InnerSimpleServer<ServerData, ClientData> {
                         }
                         Err(_error) => {
                             //Client data is unparseable, making this connection a wrong one
-                            (&*locked_self.read().unwrap()).clients.write().unwrap().get_mut(client_index).unwrap().should_remove = true;
+                            (&*locked_self.read()).clients.write().get_mut(client_index).unwrap().should_remove = true;
                         }
                     }
                 }
@@ -313,7 +315,7 @@ impl<ServerData, ClientData> InnerSimpleServer<ServerData, ClientData> {
                     match error.kind() {
                         ErrorKind::WouldBlock => {}
                         ErrorKind::ConnectionReset => {
-                            (&*locked_self.read().unwrap()).clients_mut().remove(client_index);
+                            (&*locked_self.read()).clients_mut().remove(client_index);
                             continue;
                         }
                         _ => {}
@@ -325,23 +327,23 @@ impl<ServerData, ClientData> InnerSimpleServer<ServerData, ClientData> {
         Some(total_read_bytes)
     }
 
-    pub fn read_clients(locked_self: &RwLock<Self>, skip_blocking_clients: bool) -> usize {
-        if locked_self.read().unwrap().is_blocking && skip_blocking_clients {
+    pub fn read_clients(locked_self: &UncheckedRwLock<Self>, skip_blocking_clients: bool) -> usize {
+        if locked_self.read().is_blocking && skip_blocking_clients {
             return 0;
         }
         let mut total_read_bytes: usize = 0;
-        let clients_len = locked_self.read().unwrap().clients.read().unwrap().len();
+        let clients_len = locked_self.read().clients.read().len();
         let mut client_index = 0;
         while client_index < clients_len {
-            if !locked_self.read().unwrap().clients.read().unwrap().contains_index(client_index)
-                || locked_self.read().unwrap().clients().get(client_index).unwrap().is_blocking_read && skip_blocking_clients {
+            if !locked_self.read().clients.read().contains_index(client_index)
+                || locked_self.read().clients().get(client_index).unwrap().is_blocking_read && skip_blocking_clients {
                 client_index += 1;
                 continue;
             }
             let read_bytes = Self::read_client(locked_self, client_index).unwrap_or_else(|| 0);
             total_read_bytes = total_read_bytes.checked_add(read_bytes).unwrap_or_else(|| usize::MAX);
-            if locked_self.read().unwrap().clients().get(client_index).unwrap().should_remove {
-                locked_self.read().unwrap().clients.write().unwrap().remove(client_index);
+            if locked_self.read().clients().get(client_index).unwrap().should_remove {
+                locked_self.read().clients.write().remove(client_index);
             } else {
                 client_index += 1;
             }
@@ -349,8 +351,8 @@ impl<ServerData, ClientData> InnerSimpleServer<ServerData, ClientData> {
         total_read_bytes
     }
 
-    fn read_client_input(locked_self: &RwLock<Self>, client_index: usize, real_received_string: &str) {
-        let ref_self = &*locked_self.read().unwrap();
+    fn read_client_input(locked_self: &UncheckedRwLock<Self>, client_index: usize, real_received_string: &str) {
+        let ref_self = &*locked_self.read();
         let message = real_received_string;
         let mut input = mem::take(&mut ref_self.clients_mut().get_mut(client_index).unwrap().message_buffer);
         let previous_input_len = input.len();
@@ -366,35 +368,35 @@ impl<ServerData, ClientData> InnerSimpleServer<ServerData, ClientData> {
 
         crate::message_processing::find_and_process_messages(&mut messages, 0, &ref_self.endmark.clone(), |message, keep_checking| {
             (ref_self.on_get_message)(locked_self, &client_index, message);
-            *keep_checking = ref_self.clients.read().unwrap().get(client_index).map(|client| !client.should_remove).unwrap_or_else(|| false);
+            *keep_checking = ref_self.clients.read().get(client_index).map(|client| !client.should_remove).unwrap_or_else(|| false);
         });
     }
 
-    pub fn clients_lock(&self) -> &RwLock<FixedIndexVec<Client<ClientData>>> {
+    pub fn clients_lock(&self) -> &UncheckedRwLock<FixedIndexVec<Client<ClientData>>> {
         &self.clients
     }
 
     pub fn clients(&self) -> RwLockReadGuard<'_, FixedIndexVec<Client<ClientData>>> {
-        self.clients.read().unwrap()
+        self.clients.read()
     }
 
     pub fn clients_mut(&self) -> RwLockWriteGuard<'_, FixedIndexVec<Client<ClientData>>> {
-        self.clients.write().unwrap()
+        self.clients.write()
     }
 
     pub fn send_message_to_client(&self, client: usize, message: &str) -> Option<std::io::Result<usize>> {
-        if !self.clients.read().unwrap().contains_index(client) {
+        if !self.clients.read().contains_index(client) {
             return None;
         }
         let message = self.endmark.prepare_message(message);
-        Some(self.clients.read().unwrap().get(client).unwrap().stream.write().unwrap().write(message.as_bytes()))
+        Some(self.clients.read().get(client).unwrap().stream.write().write(message.as_bytes()))
     }
 
     pub fn send_message_to_clients(&self, clients: &[usize], message: &str) -> Vec<Option<std::io::Result<usize>>> {
         let message = self.endmark.prepare_message(message);
         clients.iter().map(|&client| {
-            self.clients.read().unwrap().get(client).map(|client|
-                client.stream.write().unwrap().write(message.as_bytes()))
+            self.clients.read().get(client).map(|client|
+                client.stream.write().write(message.as_bytes()))
         }).collect::<Vec<_>>()
     }
     pub fn data(&self) -> &ServerData {
@@ -434,8 +436,8 @@ impl<ServerData, ClientData> DerefMut for InnerSimpleServer<ServerData, ClientDa
 impl<ServerData, ClientData> Drop for InnerSimpleServer<ServerData, ClientData> {
     fn drop(&mut self) {
         (self.on_close)(self);
-        self.clients.write().unwrap().iter_mut().for_each(|client| {
-            let _ = client.stream.read().unwrap().shutdown(Shutdown::Both);
+        self.clients.write().iter_mut().for_each(|client| {
+            let _ = client.stream.read().shutdown(Shutdown::Both);
         });
     }
 }
@@ -443,7 +445,7 @@ impl<ServerData, ClientData> Drop for InnerSimpleServer<ServerData, ClientData> 
 #[derive(Debug)]
 pub struct Client<ClientData> {
     id: usize,
-    stream: RwLock<TcpStream>,
+    stream: UncheckedRwLock<TcpStream>,
     socket: SocketAddr,
     message_buffer: String,
     is_blocking_read: bool,
