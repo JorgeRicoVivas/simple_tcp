@@ -49,6 +49,14 @@ impl<ServerData, ClientData> Server for SimpleServer<ServerData, ClientData> {
     }
 }
 
+impl<ServerData, ClientData> Deref for SimpleServer<ServerData, ClientData> {
+    type Target = RwLock<InnerSimpleServer<ServerData, ClientData>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
 
 #[derive(Debug)]
 pub struct InnerSimpleServer<ServerData, ClientData> {
