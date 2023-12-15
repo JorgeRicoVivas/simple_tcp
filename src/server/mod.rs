@@ -1,176 +1,43 @@
-use std::io::{ErrorKind, Read, Write};
-use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
-use std::ops::{Deref, DerefMut};
 
-use fixed_index_vec::fixed_index_vec::FixedIndexVec;
+use std::net::{SocketAddr};
 
-use crate::message_processing::{DEFAULT_ENDMARK, Endmark};
-
-#[derive(Debug)]
-pub struct SimpleServer<ServerData, ClientData> {
-    server_socket: TcpListener,
-    clients: FixedIndexVec<Client<ClientData>>,
-    data: ServerData,
-    on_request_accept: fn(&mut Self, &SocketAddr, &usize) -> Option<ClientData>,
-    on_accept: fn(&mut Self, &usize),
-    on_get_message: fn(&mut Self, &usize, &str),
-    on_close: fn(&mut Self),
-    endmark: Endmark,
-    is_blocking: bool,
+pub enum AcceptError {
+    IOError(std::io::Error),
+    CouldNotGetSocket(std::net::TcpStream),
+    DeniedSocket(SocketAddr),
 }
 
-impl<ServerData, ClientData> SimpleServer<ServerData, ClientData> {
-    pub fn new(listener: TcpListener, server_data: ServerData, on_request_accept: fn(&mut Self, &SocketAddr, &usize) -> Option<ClientData>) -> SimpleServer<ServerData, ClientData> {
-        let is_blocking = listener.set_nonblocking(true).is_err();
-        Self {
-            server_socket: listener,
-            clients: FixedIndexVec::new(),
-            data: server_data,
-            on_request_accept,
-            on_accept: |_, _| {},
-            on_get_message: |_, _, _| {},
-            on_close: |_| {},
-            endmark: DEFAULT_ENDMARK,
-            is_blocking,
-        }
-    }
+pub enum ServerAcceptError {
+    IsBlocking
+}
 
-    pub fn on_accept(&mut self, on_accept: fn(&mut Self, &usize)) {
-        self.on_accept = on_accept;
-    }
+pub trait Server {
 
-    pub fn on_request_accept(&mut self, on_request_accept: fn(&mut Self, &SocketAddr, &usize) -> Option<ClientData>) {
-        self.on_request_accept = on_request_accept;
-    }
+    /// Accepts one client, giving back the id of said client in case of being accepted.
+    fn accept(&self) -> Result<usize, AcceptError>;
 
-    pub fn on_get_message(&mut self, on_get_message: fn(&mut Self, &usize, &str)) {
-        self.on_get_message = on_get_message;
-    }
+    /// Accepts every incoming client while not blocking.
+    ///
+    /// It should return [Err] if the server is blocking, see [TcpListener::set_nonblocking].
+    fn accept_incoming_not_blocking(&self) -> Result<Vec<Result<usize, AcceptError>>, ServerAcceptError>;
 
-    pub fn on_close(&mut self, on_close: fn(&mut Self)) {
-        self.on_close = on_close;
-    }
+    /// Accepts every incoming client while blocking until there is at least one client.
+    fn accept_incoming(&self) -> Vec<Result<usize, AcceptError>>;
 
-    pub fn accept(&mut self) -> Option<usize> {
-        let (client_stream, client_socket) = self.server_socket.accept().ok()?;
-        self.accept_client(client_stream, client_socket)
-    }
+    /// Reads one clients, triggering a custom action per message received.
+    ///
+    /// Returns the amount of bytes read from this client.
+    fn read_client(&self, client_index: usize) -> Option<usize>;
 
-    pub fn accept_incoming_not_blocking(&mut self) -> Vec<usize> {
-        if self.is_blocking { return Vec::new(); }
-        let mut ids = Vec::new();
-        loop {
-            match self.server_socket.accept().ok() {
-                None => return ids,
-                Some((client_stream, client_socket)) => {
-                    let accepted_client = self.accept_client(client_stream, client_socket);
-                    if accepted_client.is_none() { continue; }
-                    ids.push(accepted_client.unwrap())
-                }
-            }
-        }
-    }
+    /// Reads all clients, triggering a custom action per each client and message received.
+    ///
+    /// Returns the amount of bytes read between all clients.
+    fn read_clients(&self, skip_blocking_clients: bool) -> usize;
 
-    pub fn accept_incoming(&mut self) {
-        self.server_socket.incoming()
-            .filter(Result::is_ok)
-            .map(Result::unwrap)
-            .collect::<Vec<_>>().into_iter()
-            .for_each(|client_stream| {
-                let client_address = client_stream.peer_addr();
-                if client_address.is_err() { return; }
-                self.accept_client(client_stream, client_address.unwrap());
-            });
-    }
-
-    fn accept_client(&mut self, stream: TcpStream, socket: SocketAddr) -> Option<usize> {
-        let is_blocking_read = stream.set_nonblocking(true).is_err();
-        let id = self.clients.reserve_pos();
-        let client_data = (self.on_request_accept)(self, &socket, &id);
-        if client_data.is_none() {
-            self.clients.remove_reserved_pos(id);
-            return None;
-        }
-        let client_data = client_data.unwrap();
-        let client = Client { id, stream, socket, message_buffer: String::new(), is_blocking_read, data: client_data };
-        self.clients.push_reserved(client.id, client);
-        (self.on_accept)(self, &id);
-        Some(id)
-    }
-
-    pub fn read_clients(&mut self, skip_blocking_clients: bool) -> usize {
-        let mut total_read_bytes: usize = 0;
-        let clients_len = self.clients.len();
-        let mut client_index = 0;
-        while client_index < clients_len {
-            let client = self.clients.get_mut(client_index);
-            if client.is_none() || (skip_blocking_clients && client.as_ref().unwrap().is_blocking_read && self.is_blocking) {
-                client_index += 1;
-                continue;
-            }
-            let client = client.unwrap();
-            let mut stream_read = [0; 1024];
-            let result = client.stream.read(&mut stream_read);
-            match result {
-                Ok(read_bytes) => {
-                    total_read_bytes = total_read_bytes.checked_add(read_bytes).unwrap_or_else(|| usize::MAX);
-                    let client_suddenly_disconnected = read_bytes == 0;
-                    if client_suddenly_disconnected {
-                        //The client has discconected without notifying it's connection's end,
-                        //this happens when its program was closed forcedly
-                        self.remove_client(client_index);
-                        continue;
-                    }
-                    match String::from_utf16(&stream_read.map(|character| character as u16)) {
-                        Ok(received_string) => {
-                            self.read_clients_input(client_index, &received_string[0..read_bytes]);
-                        }
-                        Err(_error) => {
-                            //Client data is unparseable, making this connection a wrong one
-                            self.remove_client(client_index);
-                        }
-                    }
-                }
-                Err(error) => {
-                    match error.kind() {
-                        ErrorKind::WouldBlock => {}
-                        ErrorKind::ConnectionReset => {
-                            self.remove_client(client_index);
-                            continue;
-                        }
-                        _ => {},
-                    };
-                    client_index += 1;
-                }
-            }
-        }
-        total_read_bytes
-    }
-
-    fn read_clients_input(&mut self, client_index: usize, real_received_string: &str) {
-        let client = self.clients.get_mut(client_index).unwrap();
-        let message = real_received_string;
-        let input = &mut client.message_buffer;
-        let previous_input_len = input.len();
-        input.extend(message.chars());
-        let end_bound = crate::message_processing::find_message_end_bound_utf16(&input, input.len(), false,
-                                                                                previous_input_len.checked_sub(self.endmark.string().len() + 1).unwrap_or(0), &self.endmark);
-        if end_bound.is_none() { return; }
-        let end_bound = end_bound.unwrap();
-        let mut messages = crate::message_processing::substring_utf16(input, 0, end_bound + self.endmark.string().len());
-
-        let buffer = crate::message_processing::substring_utf16(input, end_bound + self.endmark.string().len(), input.len());
-        client.message_buffer = buffer;
-
-        crate::message_processing::find_and_process_messages(&mut messages, 0, &self.endmark.clone(), |message, keep_checking| {
-            (self.on_get_message)(self, &client_index, message);
-            if !self.clients.contains_index(client_index) {
-                *keep_checking = false;
-            }
-        });
-    }
-
-    pub fn read_clients_to_end(&mut self) -> usize {
+    /// Reads all clients until there is no new messages.
+    ///
+    /// Returns the amount of bytes read between all clients and cycles.
+    fn read_clients_to_end(&self) -> usize {
         let mut total_read_bytes = 0;
         loop {
             match self.read_clients(true) {
@@ -180,123 +47,29 @@ impl<ServerData, ClientData> SimpleServer<ServerData, ClientData> {
         }
     }
 
-    pub fn get_client(&self, client_id: usize) -> Option<&Client<ClientData>> {
-        self.clients.get(client_id)
+    /// Amount of clients.
+    fn clients_len(&self) -> usize;
+
+    /// Sends a message to a client.
+    ///
+    /// Returns [None] if the index does not match to an existing client.
+    fn send_message_to_client(&self, client: usize, message: &str) -> Option<std::io::Result<usize>>;
+
+    /// Sends a message to every indicated client.
+    ///
+    /// Returns [None] for each index not matching to an existing client.
+    fn send_message_to_clients(&self, clients: &[usize], message: &str) -> Vec<Option<std::io::Result<usize>>> {
+        clients.into_iter().map(|&client_index| {
+            self.send_message_to_client(client_index, message)
+        }).collect()
     }
 
-    pub fn get_client_mut(&mut self, client_id: usize) -> Option<&mut Client<ClientData>> {
-        self.clients.get_mut(client_id)
-    }
-
-    pub fn clients_len(&self) -> usize {
-        self.clients.len()
-    }
-
-    pub fn remove_client(&mut self, client_id: usize) -> Option<Client<ClientData>> {
-        self.clients.remove(client_id)
-    }
-
-    pub fn send_message_to_client(&mut self, client: usize, message: &str) -> Option<std::io::Result<usize>> {
-        let client = self.clients.get_mut(client);
-        if client.is_none() { return None; }
-        let message = self.endmark.prepare_message(message);
-        Some(client.unwrap().stream.write(message.as_bytes()))
-    }
-
-    pub fn send_message_to_clients(&mut self, clients: &[usize], message: &str) -> Vec<Option<std::io::Result<usize>>> {
-        let message = self.endmark.prepare_message(message);
-        clients.into_iter().map(|&client| {
-            let client = self.clients.get_mut(client);
-            if client.is_none() { return None; }
-            Some(client.unwrap().stream.write(message.as_bytes()))
-        }).collect::<Vec<_>>()
-    }
-
-    pub fn send_message_to_all_clients(&mut self, message: &str) -> Vec<std::io::Result<usize>> {
-        let message = self.endmark.prepare_message(message);
-        self.clients.iter_mut().map(|client| {
-            client.stream.write(message.as_bytes())
-        }).collect::<Vec<_>>()
-    }
-    pub fn data(&self) -> &ServerData {
-        &self.data
-    }
-
-    pub fn data_mut(&mut self) -> &mut ServerData {
-        &mut self.data
-    }
-
-    pub fn endmark(&self) -> &Endmark {
-        &self.endmark
-    }
-
-    pub fn force_is_blocking(&mut self){
-        self.server_socket.set_nonblocking(false);
-        self.is_blocking=true;
-    }
-}
-
-impl<ServerData, ClientData> Deref for SimpleServer<ServerData, ClientData> {
-    type Target = ServerData;
-
-    fn deref(&self) -> &Self::Target {
-        self.data()
-    }
-}
-
-impl<ServerData, ClientData> DerefMut for SimpleServer<ServerData, ClientData> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.data_mut()
-    }
-}
-
-impl<ServerData, ClientData> Drop for SimpleServer<ServerData, ClientData> {
-    fn drop(&mut self) {
-        (self.on_close)(self);
-        self.clients.iter_mut().for_each(|client| {
-            let _ = client.stream.shutdown(Shutdown::Both);
-        });
-    }
-}
-
-#[derive(Debug)]
-pub struct Client<ClientData> {
-    id: usize,
-    stream: TcpStream,
-    socket: SocketAddr,
-    message_buffer: String,
-    is_blocking_read: bool,
-    data: ClientData,
-}
-
-impl<ClientData> Client<ClientData> {
-    pub fn id(&self) -> usize {
-        self.id
-    }
-
-    pub fn address(&self) -> &SocketAddr {
-        &self.socket
-    }
-
-    pub fn data(&self) -> &ClientData {
-        &self.data
-    }
-
-    pub fn data_mut(&mut self) -> &mut ClientData {
-        &mut self.data
-    }
-}
-
-impl<ClientData> Deref for Client<ClientData> {
-    type Target = ClientData;
-
-    fn deref(&self) -> &Self::Target {
-        self.data()
-    }
-}
-
-impl<ClientData> DerefMut for Client<ClientData> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.data_mut()
+    /// Sends a message to all clients, returning the amount of bytes written on each one of them.
+    ///
+    /// Returns [None] for each index not matching to an existing client.
+    fn send_message_to_all_clients(&self, message: &str) -> Vec<Option<std::io::Result<usize>>> {
+        (0..self.clients_len()).into_iter().map(|client_index| {
+            self.send_message_to_client(client_index, message)
+        }).collect()
     }
 }
