@@ -3,7 +3,7 @@ use std::mem;
 use std::fmt::Debug;
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::ops::{Deref, DerefMut};
-use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::{RwLockReadGuard, RwLockWriteGuard};
 
 use fixed_index_vec::fixed_index_vec::FixedIndexVec;
 
@@ -53,7 +53,7 @@ impl<ServerData, ClientData> Server for SimpleServer<ServerData, ClientData> {
 }
 
 impl<ServerData, ClientData> Deref for SimpleServer<ServerData, ClientData> {
-    type Target = RwLock<InnerSimpleServer<ServerData, ClientData>>;
+    type Target = UncheckedRwLock<InnerSimpleServer<ServerData, ClientData>>;
 
     fn deref(&self) -> &Self::Target {
         &self.inner
@@ -159,7 +159,7 @@ impl<ServerData, ClientData> InnerSimpleServer<ServerData, ClientData> {
         let is_blocking = listener.set_nonblocking(true).is_err();
         Self {
             server_socket: listener,
-            clients: UncheckedRwLock::new(RwLock::new(FixedIndexVec::new())),
+            clients: UncheckedRwLock::from(FixedIndexVec::new()),
             data: server_data,
             filter_request_accept,
             on_accept: |_, _| {},
@@ -271,7 +271,7 @@ impl<ServerData, ClientData> InnerSimpleServer<ServerData, ClientData> {
             return Err(AcceptError::DeniedSocket(socket));
         }
         let client_data = client_data.unwrap();
-        let client = Client { id, stream: UncheckedRwLock::new(RwLock::new(stream)), socket, message_buffer: String::new(), is_blocking_read, should_remove: false, data: client_data };
+        let client = Client { id, stream: UncheckedRwLock::from(stream), socket, message_buffer: String::new(), is_blocking_read, should_remove: false, data: client_data };
         locked_self.write().clients.write().push_reserved(client.id, client);
         (locked_self.read().on_accept)(locked_self, &id);
         Ok(id)
