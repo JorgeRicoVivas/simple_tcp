@@ -11,6 +11,7 @@ use crate::server::{AcceptError, Server, ServerAcceptError};
 
 pub mod builder;
 
+#[derive(Debug)]
 pub struct SimpleServer<ServerData, ClientData> {
     pub(crate) inner: RwLock<InnerSimpleServer<ServerData, ClientData>>,
 }
