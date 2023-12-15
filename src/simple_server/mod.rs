@@ -336,7 +336,7 @@ impl<ServerData, ClientData> InnerSimpleServer<ServerData, ClientData> {
         let mut client_index = 0;
         while client_index < clients_len {
             if !locked_self.read().clients.read().contains_index(client_index)
-                || locked_self.read().clients().get(client_index).unwrap().is_blocking_read && skip_blocking_clients {
+                || (locked_self.read().clients().get(client_index).unwrap().is_blocking_read && skip_blocking_clients) {
                 client_index += 1;
                 continue;
             }
