@@ -115,7 +115,7 @@ pub(crate) fn find_and_process_messages(mut input: String, endmark: &Endmark, mu
         let mut message = input.split_off(end_of_message_index);
         mem::swap(&mut input, &mut message);
         action(message.replace(endmark.escape, endmark.string), &mut keep_checking);
-        input = substring_utf16(&input, end_of_message_index + endmark.string.len(), input.len());
+        input = substring_utf16(&input, endmark.string.len(), input.len());
     }
     input
 }
