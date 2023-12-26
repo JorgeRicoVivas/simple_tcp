@@ -419,7 +419,7 @@ impl<ServerData, ClientData> InnerSimpleServer<ServerData, ClientData> {
         }).collect::<Vec<_>>()
     }
 
-    fn message_endmark(&self) -> &Endmark {
+    pub fn message_endmark(&self) -> &Endmark {
         &self.endmark
     }
 
