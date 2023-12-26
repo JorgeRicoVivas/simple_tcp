@@ -49,6 +49,7 @@ impl<ServerData, ClientData> SimpleServerBuilder<ServerData, ClientData> {
 
     pub fn build(self) -> SimpleServer<ServerData, ClientData> {
         let mut server = SimpleServer::new(InnerSimpleServer::new(self.server_socket, self.data));
+        server.filter_request_accept(self.filter_request_accept);
         if self.on_accept.is_some() {
             server.on_accept(self.on_accept.unwrap());
         }
