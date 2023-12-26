@@ -430,9 +430,9 @@ impl<ServerData, ClientData> InnerSimpleServer<ServerData, ClientData> {
         &self.endmark
     }
 
-    pub fn set_nonblocking(&mut self, non_blocking: bool) -> Result<(), ()> {
+    pub fn set_nonblocking(&mut self, non_blocking: bool, force: bool) -> Result<(), ()> {
         let result = self.server_socket.set_nonblocking(non_blocking);
-        if result.is_err() { return Err(()); }
+        if result.is_err() && !force { return Err(()); }
         self.is_blocking = !non_blocking;
         Ok(())
     }
