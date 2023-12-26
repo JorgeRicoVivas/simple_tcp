@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::mem;
 
 pub(crate) fn substring_utf16(original_string: &str, start_index: usize, end_index: usize) -> String {
     String::from_utf16(&*original_string.chars().take(end_index).skip(start_index).map(|char| char as u16).collect::<Vec<u16>>()).unwrap()
@@ -111,7 +112,8 @@ pub(crate) fn find_and_process_messages(mut input: String, endmark: &Endmark, mu
         let end_of_message_index = find_message_end_bound_utf16(&input, 0, true, input.len(), endmark);
         if end_of_message_index.is_none() { return input; }
         let end_of_message_index = end_of_message_index.unwrap();
-        let message = input.split_off(end_of_message_index);
+        let mut message = input.split_off(end_of_message_index);
+        mem::swap(&mut input, &mut message);
         action(message.replace(endmark.escape, endmark.string), &mut keep_checking);
         input = substring_utf16(&input, end_of_message_index + endmark.string.len(), input.len());
     }
