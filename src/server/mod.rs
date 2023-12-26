@@ -11,10 +11,32 @@ pub enum ServerAcceptError {
     IsBlocking
 }
 
+#[derive(Default)]
+pub struct ClientRead{
+    pub(crate) bytes_read: usize,
+    pub(crate) messages: Vec<String>,
+}
+
+impl ClientRead {
+    pub fn bytes_read(&self) -> usize {
+        self.bytes_read
+    }
+
+    pub fn messages(&self) -> &Vec<String> {
+        &self.messages
+    }
+
+    pub fn into_messages(self) -> Vec<String> {
+        self.messages
+    }
+
+}
+
+
 pub trait Server {
 
     /// Accepts one client, giving back the id of said client in case of being accepted.
-    fn accept(&self) -> Result<usize, AcceptError>;
+    fn accept_no_context(&self) -> Result<usize, AcceptError>;
 
     /// Accepts every incoming client while not blocking.
     ///
@@ -22,28 +44,28 @@ pub trait Server {
     fn accept_incoming_not_blocking(&self) -> Result<Vec<Result<usize, AcceptError>>, ServerAcceptError>;
 
     /// Accepts every incoming client while blocking until there is at least one client.
-    fn accept_incoming(&self) -> Vec<Result<usize, AcceptError>>;
+    fn accept_incoming_no_context(&self) -> Vec<Result<usize, AcceptError>>;
 
-    /// Reads one clients, triggering a custom action per message received.
+    /// Reads one clients, giving a [ClientRead] containing amount of bytes it JUST read from this
+    /// client, and messages gotten after said read, this can accumulate messages that weren't
+    /// complete on previous reads.
     ///
-    /// Returns the amount of bytes read from this client.
-    fn read_client(&self, client_index: usize) -> Option<usize>;
+    /// Returns [None] whether this client doesn't exists or has been marked to be removed (Note you
+    /// can manually set clients to be removed, but other actions can also mark clients for removal,
+    /// such as a disconnection, or a wrong written character inside a message).
+    fn read_client(&self, client_index: usize) -> Option<ClientRead>;
 
-    /// Reads all clients, triggering a custom action per each client and message received.
-    ///
-    /// Returns the amount of bytes read between all clients.
-    fn read_clients(&self, skip_blocking_clients: bool) -> usize;
+    /// Reads all clients as in [Self::read_client], returning a Vector containing the index of
+    /// every client that was read along it's messages
+    fn read_clients(&self, skip_blocking_clients: bool) -> Vec<(usize, ClientRead)>;
 
-    /// Reads all clients until there is no new messages.
-    ///
-    /// Returns the amount of bytes read between all clients and cycles.
-    fn read_clients_to_end(&self) -> usize {
-        let mut total_read_bytes = 0;
-        loop {
-            match self.read_clients(true) {
-                0 => return total_read_bytes,
-                read_bytes => total_read_bytes = total_read_bytes.checked_add(read_bytes).unwrap_or_else(|| usize::MAX)
-            }
+    /// Reads one clients, triggering a custom action on every received message
+    fn read_client_no_context(&self, client_index: usize);
+
+    /// Reads all clients, triggering a custom action on every received message per client
+    fn read_clients_no_context(&self, skip_blocking_clients: bool){
+        for client_index in 0..self.clients_len(){
+            self.read_client_no_context(client_index);
         }
     }
 

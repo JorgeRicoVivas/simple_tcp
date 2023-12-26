@@ -1,6 +1,5 @@
 use std::collections::VecDeque;
 
-
 pub(crate) fn substring_utf16(original_string: &str, start_index: usize, end_index: usize) -> String {
     String::from_utf16(&*original_string.chars().take(end_index).skip(start_index).map(|char| char as u16).collect::<Vec<u16>>()).unwrap()
 }
@@ -106,17 +105,17 @@ pub(crate) fn insert_on_queue<T>(queue: &mut VecDeque<T>, value: T, front_to_bac
     push(queue, value);
 }
 
-pub(crate) fn find_and_process_messages(input: &mut String, mut start_checking_from: usize, endmark: &Endmark, mut action: impl FnMut(&str, &mut bool)) {
+pub(crate) fn find_and_process_messages(mut input: String, endmark: &Endmark, mut action: impl FnMut(String, &mut bool)) -> String {
     let mut keep_checking = true;
     while keep_checking {
-        let end_of_message_index = find_message_end_bound_utf16(input, start_checking_from, true, input.len(), endmark);
-        if end_of_message_index.is_none() { return; }
+        let end_of_message_index = find_message_end_bound_utf16(&input, 0, true, input.len(), endmark);
+        if end_of_message_index.is_none() { return input; }
         let end_of_message_index = end_of_message_index.unwrap();
-        let message = substring_utf16(input, 0, end_of_message_index).replace(endmark.escape, endmark.string);
-        action(&message, &mut keep_checking);
-        *input = substring_utf16(input, end_of_message_index + endmark.string.len(), input.len());
-        start_checking_from = 0;
+        let message = input.split_off(end_of_message_index);
+        action(message.replace(endmark.escape, endmark.string), &mut keep_checking);
+        input = substring_utf16(&input, end_of_message_index + endmark.string.len(), input.len());
     }
+    input
 }
 
 pub const DEFAULT_ENDMARK: Endmark = Endmark::new("EOF", "\\EOF");
