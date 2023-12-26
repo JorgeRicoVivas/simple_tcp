@@ -16,9 +16,14 @@ pub mod builder;
 #[derive(Debug)]
 pub struct SimpleServer<ServerData, ClientData> {
     pub(crate) inner: UncheckedRwLock<InnerSimpleServer<ServerData, ClientData>>,
+    filter_request_accept: fn(&Self, &SocketAddr, usize) -> Option<ClientData>,
+    on_accept: fn(&Self, usize),
+    on_get_message: fn(&Self, usize, String),
+    on_close: fn(&mut Self),
 }
 
 impl<ServerData, ClientData> Server for SimpleServer<ServerData, ClientData> {
+
     fn accept_no_context(&self) -> Result<usize, AcceptError> {
         let (stream, address) = self.read().server_socket.accept()
             .map_err(|error| AcceptError::IOError(error))?;
@@ -67,7 +72,7 @@ impl<ServerData, ClientData> Server for SimpleServer<ServerData, ClientData> {
         let messages = read.unwrap().messages;
         messages.into_iter().for_each(|message| {
             if !self.inner.read().clients().contains_index(client_index) { return; }
-            (self.inner.read().on_get_message)(&self.inner, client_index, message);
+            (self.on_get_message)(self, client_index, message);
         });
     }
 
@@ -86,10 +91,46 @@ impl<ServerData, ClientData> Server for SimpleServer<ServerData, ClientData> {
 }
 
 impl<ServerData, ClientData> SimpleServer<ServerData, ClientData> {
+
+    fn new(inner_server: InnerSimpleServer<ServerData, ClientData>) -> SimpleServer<ServerData, ClientData> {
+        Self{
+            inner: UncheckedRwLock::from(inner_server),
+            filter_request_accept: |_,_,_|None,
+            on_accept: |_,_|{},
+            on_get_message: |_,_,_|{},
+            on_close: |_|{},
+        }
+    }
+
+    fn accept(&self) -> Result<usize, AcceptError> {
+        let accept = self.read().server_socket.accept();
+        if accept.is_err() {
+            return Err(AcceptError::IOError(accept.err().unwrap()));
+        }
+        let (client_stream, client_socket) = accept.unwrap();
+        self.join_filter_client(client_stream, client_socket)
+    }
+
+    fn join_filter_client(&self, stream: TcpStream, socket: SocketAddr) -> Result<usize, AcceptError> {
+        let is_blocking_read = stream.set_nonblocking(true).is_err();
+
+        let id = self.write().clients.write().reserve_pos();
+        let client_data = (self.filter_request_accept)(self, &socket, id);
+        if client_data.is_none() {
+            self.write().clients.write().remove_reserved_pos(id);
+            return Err(AcceptError::DeniedSocket(socket));
+        }
+        let client_data = client_data.unwrap();
+        let client = Client { id, stream: UncheckedRwLock::from(stream), socket, message_buffer: String::new(), is_blocking_read, should_remove: false, data: client_data };
+        self.write().clients.write().push_reserved(client.id, client);
+        (self.on_accept)(self, id);
+        Ok(id)
+    }
+
     fn insert_filter_client(&self, stream: TcpStream, address: SocketAddr) -> Result<usize, AcceptError> {
         let is_blocking_read = stream.set_nonblocking(true).is_err();
         let id = self.inner.read().clients.write().reserve_pos();
-        let client_data = (self.inner.read().filter_request_accept)(&self.inner, &address, id);
+        let client_data = (self.filter_request_accept)(self, &address, id);
         if client_data.is_none() {
             self.inner.read().clients.write().remove_reserved_pos(id);
             return Err(AcceptError::DeniedSocket(address));
@@ -97,8 +138,62 @@ impl<ServerData, ClientData> SimpleServer<ServerData, ClientData> {
         let client_data = client_data.unwrap();
         let client = Client { id, stream: UncheckedRwLock::from(stream), socket: address, message_buffer: String::new(), is_blocking_read, should_remove: false, data: client_data };
         self.inner.read().clients.write().push_reserved(client.id, client);
-        (&self.inner.read().on_accept)(&self.inner, id);
+        (self.on_accept)(self, id);
         Ok(id)
+    }
+
+    /// Specifies how to filter an incoming connection based on a client's [SocketAddr], to confirm
+    /// a client's connection, this function should return [Some] where the contents of [Some] are
+    /// the initial data of a client ([ClientData]).
+    /// <br>
+    /// <br>
+    /// ```no_run rust
+    /// let mut server : simple_tcp::simple_server::InnerSimpleServer<(),String> = ...;
+    ///
+    /// server.filter_request_accept(|server, client_socket, client_index|{
+    ///     // Only accepts using IPv4 whose IP starts with '192'
+    ///     if !client_socket.is_ipv4() && !client_socket.to_string().starts_with("192"){
+    ///         // Rejects connection from an IP that is not v4 or not in 192.x.y.z
+    ///         return None;
+    ///     }
+    ///     // Accepts this client
+    ///     Some("My client from 192.x.y.z".to_string())
+    /// });
+    /// ```
+    pub(crate) fn filter_request_accept(&mut self, on_request_accept: fn(&Self, &SocketAddr, usize) -> Option<ClientData>) {
+        self.filter_request_accept = on_request_accept;
+    }
+
+    /// Indicates an action to take once a client is accepted (This is after filter_request is
+    /// executed, meaning Clients already have been included to the server and their data is valid).
+    /// <br>
+    /// <br>
+    /// This is commonly used to initialize communications to the client.
+    /// <br>
+    /// <br>
+    ///
+    /// ```no_run rust
+    /// let mut server : simple_tcp::simple_server::InnerSimpleServer<(),String> = ...;
+    ///
+    /// server.on_accept(|server, accepted_client_index|{
+    ///     // Gets the string of the client (This is because the [ClientData] type is 'String',
+    ///     // where [ClientData] derefs to said String)
+    ///     let client_string = &*server.get_client(*accepted_client_index).unwrap();
+    ///     let salutation_message = format!("Welcome to my app client {}!", client_string);
+    ///     // Sends a salutation message to the client
+    ///     server.send_message_to_client(*accepted_client_index, &*salutation_message);
+    /// });
+    /// ```
+    pub(crate) fn on_accept(&mut self, on_accept: fn(&Self, usize)) {
+        self.on_accept = on_accept;
+    }
+
+    pub(crate) fn on_get_message(&mut self, on_get_message: fn(&Self, usize, String)) {
+        self.on_get_message = on_get_message;
+    }
+
+    pub(crate) fn on_close(&mut self, on_close: fn(&mut Self)) {
+        self.on_close = on_close;
     }
 }
 
@@ -117,10 +212,6 @@ pub struct InnerSimpleServer<ServerData, ClientData> {
     clients: UncheckedRwLock<FixedIndexVec<Client<ClientData>>>,
     data: ServerData,
     // todo extract fn(&UncheckedRwLock...) to SimpleServer instead of InnerSimpleServer to avoid write locks
-    filter_request_accept: fn(&UncheckedRwLock<Self>, &SocketAddr, usize) -> Option<ClientData>,
-    on_accept: fn(&UncheckedRwLock<Self>, usize),
-    on_get_message: fn(&UncheckedRwLock<Self>, usize, String),
-    on_close: fn(&mut Self),
     endmark: Endmark,
     is_blocking: bool,
 }
@@ -154,8 +245,7 @@ impl<ServerData, ClientData> InnerSimpleServer<ServerData, ClientData> {
     /// let mut server = InnerSimpleServer::new(
     ///     TcpListener::bind("192.168.1.170:8080").unwrap(),
     ///     // This server does not hold data
-    ///     (),
-    ///     |server, client_socket, client_index|{
+    ///     ()    /// |server, client_socket, client_index|{
     ///         // We initialize incoming clients by giving them their index, we could have written
     ///         // Some(()) in order to not store information about them
     ///         Some(client_index)
@@ -206,98 +296,15 @@ impl<ServerData, ClientData> InnerSimpleServer<ServerData, ClientData> {
     /// // Blacklists another IP
     /// server.black_list.insert(IpAddr::from_str("192.168.1.160").unwrap());
     /// ```
-    pub(crate) fn new(listener: TcpListener, server_data: ServerData, filter_request_accept: fn(&UncheckedRwLock<InnerSimpleServer<ServerData, ClientData>>, &SocketAddr, usize) -> Option<ClientData>) -> InnerSimpleServer<ServerData, ClientData> {
+    pub(crate) fn new(listener: TcpListener, server_data: ServerData) -> InnerSimpleServer<ServerData, ClientData> {
         let is_blocking = listener.set_nonblocking(true).is_err();
         Self {
             server_socket: listener,
             clients: UncheckedRwLock::from(FixedIndexVec::new()),
             data: server_data,
-            filter_request_accept,
-            on_accept: |_, _| {},
-            on_get_message: |_, _, _| {},
-            on_close: |_| {},
             endmark: DEFAULT_ENDMARK,
             is_blocking,
         }
-    }
-
-    /// Specifies how to filter an incoming connection based on a client's [SocketAddr], to confirm
-    /// a client's connection, this function should return [Some] where the contents of [Some] are
-    /// the initial data of a client ([ClientData]).
-    /// <br>
-    /// <br>
-    /// ```no_run rust
-    /// let mut server : simple_tcp::simple_server::InnerSimpleServer<(),String> = ...;
-    ///
-    /// server.filter_request_accept(|server, client_socket, client_index|{
-    ///     // Only accepts using IPv4 whose IP starts with '192'
-    ///     if !client_socket.is_ipv4() && !client_socket.to_string().starts_with("192"){
-    ///         // Rejects connection from an IP that is not v4 or not in 192.x.y.z
-    ///         return None;
-    ///     }
-    ///     // Accepts this client
-    ///     Some("My client from 192.x.y.z".to_string())
-    /// });
-    /// ```
-    pub(crate) fn filter_request_accept(&mut self, on_request_accept: fn(&UncheckedRwLock<Self>, &SocketAddr, usize) -> Option<ClientData>) {
-        self.filter_request_accept = on_request_accept;
-    }
-
-    /// Indicates an action to take once a client is accepted (This is after filter_request is
-    /// executed, meaning Clients already have been included to the server and their data is valid).
-    /// <br>
-    /// <br>
-    /// This is commonly used to initialize communications to the client.
-    /// <br>
-    /// <br>
-    ///
-    /// ```no_run rust
-    /// let mut server : simple_tcp::simple_server::InnerSimpleServer<(),String> = ...;
-    ///
-    /// server.on_accept(|server, accepted_client_index|{
-    ///     // Gets the string of the client (This is because the [ClientData] type is 'String',
-    ///     // where [ClientData] derefs to said String)
-    ///     let client_string = &*server.get_client(*accepted_client_index).unwrap();
-    ///     let salutation_message = format!("Welcome to my app client {}!", client_string);
-    ///     // Sends a salutation message to the client
-    ///     server.send_message_to_client(*accepted_client_index, &*salutation_message);
-    /// });
-    /// ```
-    pub(crate) fn on_accept(&mut self, on_accept: fn(&UncheckedRwLock<Self>, usize)) {
-        self.on_accept = on_accept;
-    }
-
-    pub(crate) fn on_get_message(&mut self, on_get_message: fn(&UncheckedRwLock<Self>, usize, String)) {
-        self.on_get_message = on_get_message;
-    }
-
-    pub(crate) fn on_close(&mut self, on_close: fn(&mut Self)) {
-        self.on_close = on_close;
-    }
-
-    fn accept(locked_self: &UncheckedRwLock<Self>) -> Result<usize, AcceptError> {
-        let accept = locked_self.read().server_socket.accept();
-        if accept.is_err() {
-            return Err(AcceptError::IOError(accept.err().unwrap()));
-        }
-        let (client_stream, client_socket) = accept.unwrap();
-        Self::join_filter_client(locked_self, client_stream, client_socket)
-    }
-
-    fn join_filter_client(locked_self: &UncheckedRwLock<Self>, stream: TcpStream, socket: SocketAddr) -> Result<usize, AcceptError> {
-        let is_blocking_read = stream.set_nonblocking(true).is_err();
-
-        let id = (&mut *locked_self.write()).clients.write().reserve_pos();
-        let client_data = (locked_self.read().filter_request_accept)(locked_self, &socket, id);
-        if client_data.is_none() {
-            locked_self.write().clients.write().remove_reserved_pos(id);
-            return Err(AcceptError::DeniedSocket(socket));
-        }
-        let client_data = client_data.unwrap();
-        let client = Client { id, stream: UncheckedRwLock::from(stream), socket, message_buffer: String::new(), is_blocking_read, should_remove: false, data: client_data };
-        locked_self.write().clients.write().push_reserved(client.id, client);
-        (locked_self.read().on_accept)(locked_self, id);
-        Ok(id)
     }
 
     fn read_client(locked_self: &UncheckedRwLock<Self>, client_index: usize) -> Option<ClientRead> {
@@ -445,10 +452,10 @@ impl<ServerData, ClientData> DerefMut for InnerSimpleServer<ServerData, ClientDa
     }
 }
 
-impl<ServerData, ClientData> Drop for InnerSimpleServer<ServerData, ClientData> {
+impl<ServerData, ClientData> Drop for SimpleServer<ServerData, ClientData> {
     fn drop(&mut self) {
         (self.on_close)(self);
-        self.clients.write().iter_mut().for_each(|client| {
+        self.inner.write().clients.write().iter_mut().for_each(|client| {
             let _ = client.stream.read().shutdown(Shutdown::Both);
         });
     }
